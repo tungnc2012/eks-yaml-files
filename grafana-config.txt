@@ -1,0 +1,76 @@
+## Create IAM-OIDC-Provider for Cluster:
+ # Get Cluster's-OIDC-Provider-URL:
+   Template: aws eks describe-cluster --name <cluster_name> --query "cluster.identity.oidc.issuer" --output text
+         ==> aws eks describe-cluster --name vticloud--eks-cluster --query "cluster.identity.oidc.issuer" --output text
+             ++> OIDC-Provider-URL: https://oidc.eks.ap-southeast-1.amazonaws.com/id/F11712221D6D736556E48167F2F9DCAD
+
+ # List IAM-OIDC-Provider:
+   Template: aws iam list-open-id-connect-providers | grep <Cluster-OIDC-ID>
+         ==> aws iam list-open-id-connect-providers | grep F11712221D6D736556E48167F2F9DCAD
+             ++> If output is returned, you already have a provider for your cluster. If no output is returned, then you must create an IAM OIDC provider
+
+ # Create IAM-OIDC-Provider for Cluster:
+   Template: eksctl utils associate-iam-oidc-provider \
+                          --region <region-code> \
+                          --cluster <your-cluster-name> \
+                          --approve
+         ==> eksctl utils associate-iam-oidc-provider \
+                          --region ap-southeast-1 \
+                          --cluster vticloud--eks-cluster \
+                          --approve
+             ++> OIDC-Provider-ARN: arn:aws:iam::929786255685:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/F11712221D6D736556E48167F2F9DCAD
+
+## Create an IAM-Policy:
+   ==> aws iam create-policy \
+               --policy-name SysOpsLoadBalancerControllerIAMPolicy \
+               --policy-document https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.1.0/docs/install/iam_policy.json
+       ++> Policy-ARN: arn:aws:iam::929786255685:policy/SysOpsLoadBalancerControllerIAMPolicy
+
+## Create a IAM-Role and ServiceAccount for the AWS-Load-Balancer-Controller:
+   Template: eksctl create iamserviceaccount \
+                           --cluster=<cluster-name> \
+                           --namespace=kube-system \
+                           --name=aws-load-balancer-controller \
+                           --attach-policy-arn=arn:aws:iam::<AWS_ACCOUNT_ID>:policy/AWSLoadBalancerControllerIAMPolicy \
+                           --approve
+         ==> eksctl create iamserviceaccount \
+                           --cluster=vticloud--eks-cluster \
+                           --namespace=kube-system \
+                           --name=aws-load-balancer-controller \
+                           --attach-policy-arn=arn:aws:iam::929786255685:policy/SysOpsLoadBalancerControllerIAMPolicy \
+                           --approve
+
+## Add Controller to Cluster
+ # Install cert-manager:
+   ==> kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v1.0.2/cert-manager.yaml
+
+ # Download spec for load-balancer-controller:
+   ==> curl -o create--alb-ingress-controller.yaml https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.1.0/docs/install/v2_1_0_full.yaml
+
+ # Edit the saved yaml file, go to the "Deployment spec", and set the controller "--cluster-name arg" value to your EKS cluster name:
+   ==> apiVersion: apps/v1
+       kind: Deployment
+       . . .
+       name: aws-load-balancer-controller
+       namespace: kube-system
+       spec:
+          . . .
+           template:
+               spec:
+                   containers:
+                       - args:
+                           - --cluster-name=<INSERT_CLUSTER_NAME>
+
+ # If you use IAM roles for service accounts, we recommend that you delete the ServiceAccount from the yaml spec. This will preserve the eksctl created iamserviceaccount if you delete the installation section from the yaml spec
+   ==> apiVersion: v1
+       kind: ServiceAccount
+
+ # Create ALB-Controller:
+   ==> kubectl apply -f create--alb-ingress-controller.yaml
+
+## Create Garafa-Service & Grafana-Ingress:
+   ==> kubectl -f apply create--grafana-svc-ingress.yaml
+ # View Grafana-Address:
+   ==> kubectl get ingress -n monitor
+       ++> NAME              CLASS    HOSTS   ADDRESS                                                                      PORTS   AGE
+           grafana-ingress   <none>   *       k8s-monitor-grafanai-c1dc85fc3e-704826146.ap-southeast-1.elb.amazonaws.com   80      24d
